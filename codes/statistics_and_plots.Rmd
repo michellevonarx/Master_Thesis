@@ -1,0 +1,101 @@
+---
+title: "statistics_and_plots"
+output: word_document
+---
+
+```{r}
+## BFA analysis:
+
+rm(list=ls())
+library(rlang)
+library(broom)
+library(ggfortify)
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(readxl)
+library(dplyr)
+library(ggsci)
+library(gplots)
+library(multcompView)
+library(rcompanion)
+
+# read in files from fiji macro:
+bodies<- read_excel("BFA_body_intensity.xlsx")
+membrane <- read_excel("BFA_membrane_intensity.xlsx")
+
+mem<-membrane[,seq(from = 5, to = 125, by = 6)] # number of colums in your BFA_membrane data
+mem<- as.data.frame(mem)
+colnames(mem) <- mem[1,]
+mem <- mem[-1, ]
+mem <- as.data.frame(sapply(mem, as.numeric)) 
+str(mem)
+mem2 <- mem %>% dplyr::na_if(0.000)
+mem_means<-as.vector(colMeans(mem2, na.rm=TRUE)  ) # calculate means per image
+
+bod<-bodies[,seq(from = 5, to = 125, by = 6)]  # number of colums in your BFA_body data
+bod<- as.data.frame(bod)
+colnames(bod) <- bod[1,]
+bod <- bod[-1, ]
+bod <- as.data.frame(sapply(bod, as.numeric)) #<- sapply is here
+str(bod) 
+bod2 <- bod %>% dplyr::na_if(0.000)
+BFA_means<-as.vector(colMeans(bod2, na.rm=TRUE)  ) # calculate means per image
+
+img<- colnames(mem)
+dd <- data.frame(img, BFA_means, mem_means)
+
+
+ID1<-rep("name", 18) # name of condition/genotype
+dd["ID"]<-ID1
+
+
+
+```
+
+
+```{r}
+
+# statistics and boxplot:
+
+dd <- read_excel("file.xlsx")
+dd$ID<- factor(dd$ID, levels = c("name1","name2"))
+
+dd<- dd%>%group_by(ID, experiment)%>%dplyr::mutate(values = measure/ means)
+
+# Boxplots
+gg <- ggplot(dd, aes(x = ID, y = values , fill=ID ))+
+    theme_classic()+
+    geom_boxplot()+
+    scale_colour_grey()+
+    geom_point(aes(color = factor(experiment)), alpha = 0.5, position = position_jitterdodge(dodge.width = 0.5))+
+    theme(axis.text.x = element_text(angle = 65, hjust = 1)) +
+    theme(axis.text.x = element_text(  size=10),axis.text.y = element_text( size=10, face="bold")) +
+    labs(title = "BFA treatment",
+    subtitle = "",  x = ".",   y = "membrane intesity /BFA body intensity")+
+    annotate(geom="text", x=c(1, 2), y=2.4, label=c("x", "x"))+
+    scale_fill_manual(name="ID",values = c("name1" = "lightsalmon2", "name2" = "skyblue2"))
+    
+plot(gg)
+
+
+# kruskalwallis and pairwise.wilcox.test
+
+k<- kruskal.test(values~ ID, data =dd)
+k
+PT<-pairwise.wilcox.test(dd$values, dd$ID,  p.adjust.method = "bonferroni")
+PT = PT$p.value    ### Extract p-value table
+PT
+
+PT1 = fullPTable(PT)
+PT1
+
+multcompLetters(PT1,
+                compare="<",
+                threshold=0.05,  # p-value to use as significance threshold
+                Letters=letters,
+                reversed = FALSE)
+
+
+```
+

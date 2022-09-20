@@ -1,0 +1,251 @@
+---
+title: "transcriptomic_analyisis"
+output: word_document
+---
+```{r}
+
+## gene correlation matrix workflow:
+
+library(DESeq2)
+library(countToFPKM)
+library(readr)
+library(devtools)
+library(gplots)
+library(RColorBrewer)
+library(dplyr)
+library("viridis") 
+
+#Homemade functions
+All.num <- function(x){x[,1:ncol(x)] <- sapply(x[,1:ncol(x)], as.numeric)
+return(x)}
+All.floor <- function(x){x[,1:ncol(x)] <- sapply(x[,1:ncol(x)], floor)
+return(x)}
+
+
+#Import Raw counts
+
+counts <- read.csv("reads_counts.csv", stringsAsFactors = F, dec = ",") 
+
+#Set annotation table for DESeq package
+colData <- data.frame(condition=c("0h","1h","3h","6h","12h","24h","48h","72h","0h","1h","3h","6h","12h","24h","48h","72h"))
+rownames(colData) <- colnames(counts)[2:17]
+
+#Import transcripts length and calculate average transcripts length per gene
+Length <- read.delim("Transcripts_length.txt") 
+
+
+Length <- Length[order(Length$ID),]
+AvLength <- aggregate(Length$len, by = list(Length$ID), FUN= mean)
+Length <- Length[order(Length$Gene.stable.ID),] 
+AvLength <- aggregate(Length, by = list(Length$Gene.stable.ID), FUN= mean) 
+
+#Create counts table for further use
+counts_3 <- counts[counts$Gene_ID %in% AvLength$Group.1,]
+row.names(counts_3) <- counts_3$Gene_ID
+counts_3 <- counts_3[,-1]
+counts_3 <- All.num(counts_3)
+counts_3 <- All.floor(counts_3)
+counts_3 <- as.matrix(counts_3)
+mode(counts_3) <- "integer"
+
+#Run DESeq model
+dds <- DESeqDataSetFromMatrix(countData=counts_3, colData=colData, design=~ condition)
+
+
+#Calculate Fkpm
+L <- AvLength$Transcript.length..including.UTRs.and.CDS./1000 
+fpm <- fpm(dds) 
+fkpm_1 <- fpm/L 
+
+
+#Transpose table, put good colnames, remove first line with genIDs
+counts <- as.matrix(fkpm_1)
+counts <- as.data.frame(t(counts))
+colnames(counts) 
+
+
+#Convert table to numeric
+counts <- as.data.frame(sapply(counts[,1:ncol(counts)], as.numeric))
+
+#Correlation analysis
+cor <- cor(counts)
+cor = round(cor, 3)
+
+#Keep only Remorins as rows
+Rem <- c("AT3G48940", "AT3G61260", "AT2G45820", "AT5G23750", "AT1G63295", "AT1G69325", "AT4G00670", "AT3G57540", "AT2G41870", "AT1G45207", "AT2G02170", "AT1G30320", "AT1G53860", "AT4G36970", "AT1G67590", "AT1G13920", "AT5G61280")
+cor_REM <- cor[row.names(cor) %in% Rem,]
+
+
+#Set index for desire filter
+index <- which(abs(cor_REM) > .9, # your criteria
+               arr.ind = T) # the result of the which function is now in rows & columns
+
+
+#Create Table with Remorins, Correlation genes and Pearson Index
+
+DF <- cbind.data.frame(Remorins = rownames(cor_REM)[index[,1]], # get the row name 
+                 Corr.Genes = colnames(cor_REM)[index[,2]],
+                 Pearson.Index = cor_REM[index])
+
+
+#Remove Correlation = 1 and transpose table for heatmap
+DF <- DF[-which(DF$Pearson.Index == 1),]
+IDs <- DF$Corr.Genes[-which(duplicated(DF$Corr.Genes))]
+
+cor_REM_GOIs <- cor_REM[,which(colnames(cor_REM) %in% IDs)]
+
+cor_REM_GOIs_2 <- t(cor_REM_GOIs)
+colnames(cor_REM_GOIs_2) <- cor_REM$X
+
+cor_REM_GOIs_2 <- All.num(cor_REM_GOIs_2)
+
+
+# heatmap of correlated genes and clustering of REMs
+coul <- colorRampPalette(brewer.pal(8, "RdBu"))(250)
+coul<-rev(coul)
+heatmap.2(as.matrix(cor_REM_GOIs_2), col = couls, trace="none", density.info="none",scale="col" , cexRow = 0.8)
+
+```
+
+
+```{r}
+
+## clusterwise gene expression profile over time:
+
+clusters<- read_excel("GO_enriched_gene_IDs.xlsx") # file with GO enriched genes per cluster
+dd <- read_csv("FKPM_normalized_expression.csv")
+colnames(dd)[1] <- "Gene_ID"
+
+cl1<-clusters%>%filter(cluster==1)
+cl2<-clusters%>%filter(cluster==2)
+
+# filter gene expression of GO enriched genes
+
+dd2<-dd %>%filter(Gene_ID %in% cl1$AT)
+dd2<-dd %>%filter(Gene_ID %in% cl2$AT)
+
+# normalize expression and calculate mean of replicates
+
+countData <- as.matrix(dd2[,-1])
+scale<-t(base::scale(t(  countData )))
+scale_d<-as.data.frame(scale)
+scale_d["Gene_ID"]=dd2["Gene_ID"]
+dd3<-unique(scale_d)
+dd_right<- dd3[, 9:17]
+colnames(dd_right) <- c("0h","1h", "3h", "6h", "12h", "24h", "48h", "72h","Gene_ID")
+dd_right2<-dd_right[, c("Gene_ID","0h","1h", "3h", "6h", "12h", "24h", "48h", "72h")]
+dd_left<- dd3[, 1:8]
+dd_left["Gene_ID"]=dd3[, 17]
+colnames(dd_left) <- c( "0h","1h", "3h", "6h", "12h", "24h", "48h", "72h","Gene_ID")
+dd_left2<-dd_left[, c("Gene_ID","0h","1h", "3h", "6h", "12h", "24h", "48h", "72h")]
+result3<-rbind(dd_left2, dd_right2)
+long <- melt(setDT(result3), id.vars = c("Gene_ID"), variable.name = "hours")
+long2 <-long%>%group_by(Gene_ID, hours)%>%summarise(mittel=mean(value), se=sd(value)/n())
+
+
+# plot normlaized gene expression over time 
+
+
+gg<-ggplot(long2, aes(x=hours, y=mittel, colour=Gene_ID, group=Gene_ID))  +geom_smooth(span=0.7,
+  position = "identity", show.legend = FALSE)+  theme_classic()+ 
+  scale_color_viridis(discrete = TRUE, option = "A")+
+  scale_fill_viridis(discrete = TRUE) 
+
+plot(gg)
+
+
+```
+
+
+```{r}
+
+# REMORIN expression profile heatmap
+
+dd  <- readr::read_csv("FKPM_normalized_expression.csv") 
+REM<- read_excel("REM_Gene_IDs.xlsx") # excel with REM name and corresponding AT
+
+colnames(dd)[1] <- "Gene_ID"
+REM<- REM[, 1:2]
+REM<- REM[1:18,]
+REM<-REM[-1,]
+colnames(REM)<-c("ID","AT" )
+
+# filter only REM gene expression
+
+dd2<-dd %>%filter(Gene_ID %in% REM$AT)
+countData <- as.matrix(dd2[,-1])
+
+# normalize expression and calculate mean of replicates
+
+scale<-t(base::scale(t(  countData )))
+scale_d<-as.data.frame(scale)
+scale_d["Gene_ID"]=dd2["Gene_ID"]
+dd3<-REM %>%filter(AT %in% dd$Gene_ID)
+dd3<-unique(dd3)
+dd4<-dd3[order(dd3$AT, decreasing = TRUE), ]   
+dd5<-scale_d[order(scale_d$Gene_ID, decreasing = TRUE), ] 
+dd5["Gene_ID"]=dd4["ID"]
+dd_right<- dd5[, 9:17]
+colnames(dd_right) <- c("0h","1h", "3h", "6h", "12h", "24h", "48h", "72h","Gene_ID")
+dd_right2<-dd_right[, c("Gene_ID","0h","1h", "3h", "6h", "12h", "24h", "48h", "72h")]
+dd_left<- dd5[, 1:8]
+dd_left["Gene_ID"]=dd5[, 17]
+colnames(dd_left) <- c( "0h","1h", "3h", "6h", "12h", "24h", "48h", "72h","Gene_ID")
+dd_left2<-dd_left[, c("Gene_ID","0h","1h", "3h", "6h", "12h", "24h", "48h", "72h")]
+result<-rbind(dd_left2, dd_right2)
+norm2<-result%>%group_by(Gene_ID)%>%summarise_each(., funs=mean)
+norm2<-drop_na(norm2)
+
+countData <- as.matrix(norm2[,-1])
+rownames(countData) <- norm2$Gene_ID
+trans<-t(countData)
+
+# heatmap and clustering 
+
+coul <- colorRampPalette(brewer.pal(8, "RdBu"))(25)
+coul<-rev(coul)
+heatmap.2(trans, scale="row", col=coul, key=TRUE,Rowv   = NA, trace="none", density.info = "none")
+
+
+
+```
+
+
+
+
+
+
+```{r}
+# GO enrichment and Gene visible data plots:
+
+# REMORIN gene expression fold change of salt related studies under the top 10 perturbations from Genevisible:
+
+dd <- read_excel("Genevisible.xlsx") 
+coul <- colorRampPalette(brewer.pal(8, "RdBu"))(10)
+coul<-rev(coul)
+
+p<-ggplot(data=dd, aes(x=reorder(both, -log2_expression), y=log2_expression, fill=log2_expression)) +
+  geom_bar(stat="identity")+ theme_classic()+
+  scale_fill_gradient(low="blue", high="red")+coord_flip()
+  
+plot(p)
+
+# GO enrichment from shiny:
+dd <- read_excel("shiny_GO_enrichment.xlsx")
+
+gg<-ggplot(dd, aes(x=Name, y=fold_enrichment, colour= neg_log_10_FDR )) +  
+  geom_segment(aes(x=Name,y=0, xend=Name ,yend=fold_enrichment ), size=1, fill=dd$FDR) +
+   geom_point(aes(size=dd$number_of_genes))+
+   theme_light()+
+  scale_color_viridis(discrete = FALSE, option = "A")+
+  scale_fill_viridis(discrete = FALSE, option = "A") +coord_flip()
+
+
+
+plot(gg)
+
+
+
+```
+
+
